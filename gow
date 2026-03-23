@@ -509,77 +509,75 @@ def generate_erd_xml(sql_text: str, title: str = "Entity Relationship Diagram") 
         "error": None,
     }
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # PowerDesigner 16.x Physical Data Model (.pdm) XML Generator
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Map common SQL types to PowerDesigner physical data type codes.
-# PowerDesigner stores the raw type name in PhysicalName/DataType; we also
-# set the Length / Precision where appropriate so the model round-trips cleanly.
 _PD_TYPE_MAP = {
-    "INT":          ("int",         None, None),
-    "INTEGER":      ("int",         None, None),
-    "BIGINT":       ("bigint",      None, None),
-    "SMALLINT":     ("smallint",    None, None),
-    "TINYINT":      ("tinyint",     None, None),
-    "FLOAT":        ("float",       None, None),
-    "DOUBLE":       ("double",      None, None),
-    "DECIMAL":      ("decimal",     18,   2),
-    "NUMERIC":      ("numeric",     18,   2),
-    "REAL":         ("real",        None, None),
-    "BOOLEAN":      ("bit",         None, None),
-    "BOOL":         ("bit",         None, None),
-    "BIT":          ("bit",         None, None),
-    "CHAR":         ("char",        255,  None),
-    "VARCHAR":      ("varchar",     255,  None),
-    "TEXT":         ("text",        None, None),
-    "NCHAR":        ("nchar",       255,  None),
-    "NVARCHAR":     ("nvarchar",    255,  None),
-    "NTEXT":        ("ntext",       None, None),
-    "DATE":         ("date",        None, None),
-    "TIME":         ("time",        None, None),
-    "DATETIME":     ("datetime",    None, None),
-    "TIMESTAMP":    ("timestamp",   None, None),
-    "BLOB":         ("blob",        None, None),
-    "CLOB":         ("clob",        None, None),
-    "BINARY":       ("binary",      None, None),
-    "VARBINARY":    ("varbinary",   None, None),
+    "INT":          ("int",          None, None),
+    "INTEGER":      ("int",          None, None),
+    "BIGINT":       ("bigint",       None, None),
+    "SMALLINT":     ("smallint",     None, None),
+    "TINYINT":      ("tinyint",      None, None),
+    "FLOAT":        ("float",        None, None),
+    "DOUBLE":       ("double",       None, None),
+    "DECIMAL":      ("decimal",      18,   2),
+    "NUMERIC":      ("numeric",      18,   2),
+    "REAL":         ("real",         None, None),
+    "BOOLEAN":      ("bit",          None, None),
+    "BOOL":         ("bit",          None, None),
+    "BIT":          ("bit",          None, None),
+    "CHAR":         ("char",         255,  None),
+    "VARCHAR":      ("varchar",      255,  None),
+    "TEXT":         ("text",         None, None),
+    "NCHAR":        ("nchar",        255,  None),
+    "NVARCHAR":     ("nvarchar",     255,  None),
+    "NTEXT":        ("ntext",        None, None),
+    "DATE":         ("date",         None, None),
+    "TIME":         ("time",         None, None),
+    "DATETIME":     ("datetime",     None, None),
+    "TIMESTAMP":    ("timestamp",    None, None),
+    "BLOB":         ("blob",         None, None),
+    "CLOB":         ("clob",         None, None),
+    "BINARY":       ("binary",       None, None),
+    "VARBINARY":    ("varbinary",    None, None),
     "UUID":         ("uniqueidentifier", None, None),
-    "JSON":         ("nvarchar",    4000, None),
-    "JSONB":        ("nvarchar",    4000, None),
+    "JSON":         ("nvarchar",     4000, None),
+    "JSONB":        ("nvarchar",     4000, None),
 }
 
 
 def _pd_type_info(raw_type: str):
-    """
-    Return (pd_type_name, length, precision) for a raw SQL type string.
-    Handles types like VARCHAR(255) or DECIMAL(10,2).
-    """
+    """Return (pd_type_name, length, precision) for a raw SQL type string."""
     base = re.split(r"[\s(]", raw_type)[0].upper()
-    # Parse length/precision from parens e.g. VARCHAR(255) or DECIMAL(10,2)
     paren_m = re.search(r"\((\d+)(?:,\s*(\d+))?\)", raw_type)
-    length = int(paren_m.group(1)) if paren_m else None
+    length    = int(paren_m.group(1)) if paren_m else None
     precision = int(paren_m.group(2)) if paren_m and paren_m.group(2) else None
 
     if base in _PD_TYPE_MAP:
         pd_name, default_len, default_prec = _PD_TYPE_MAP[base]
         return (
             pd_name,
-            length if length is not None else default_len,
+            length    if length    is not None else default_len,
             precision if precision is not None else default_prec,
         )
-    # Unknown type — pass through as-is
     return (raw_type.lower(), length, precision)
 
 
-def _make_id() -> str:
-    """Generate a short uppercase hex object ID as used by PowerDesigner."""
-    return uuid.uuid4().hex[:8].upper()
+def _pdm_id(counter: list) -> str:
+    """Return next sequential object ID in PowerDesigner style, e.g. 'o3'."""
+    counter[0] += 1
+    return f"o{counter[0]}"
+
+
+def _make_guid() -> str:
+    """Return an uppercase GUID without braces."""
+    return str(uuid.uuid4()).upper()
 
 
 def _sub(parent_el, tag: str, text: str = None, **attrs):
-    """Helper: create a sub-element, set attributes and optional text."""
+    """Create a sub-element with optional text content and attributes."""
     el = ET.SubElement(parent_el, tag)
     for k, v in attrs.items():
         el.set(k, str(v))
@@ -588,17 +586,19 @@ def _sub(parent_el, tag: str, text: str = None, **attrs):
     return el
 
 
+import time as _time
+
+
 def generate_erd_pdm(sql_text: str, title: str = "Physical Data Model") -> dict:
     """
     Parse DDL SQL and return a SAP PowerDesigner 16.x Physical Data Model
     XML string (.pdm).
 
-    Import into PowerDesigner via:
-        File → Reverse Engineer → Database  (choose the .pdm file)
-    or open it directly with File → Open.
+    The output file can be opened directly in PowerDesigner 16.x via:
+        File → Open  (select the .pdm file)
 
-    Returns a dict with keys:
-        xml               – the .pdm XML string (None on error)
+    Returns a dict:
+        xml               – the .pdm XML string  (None on error)
         table_count       – number of tables parsed
         relationship_count– number of FK relationships
         error             – error message string or None
@@ -619,179 +619,224 @@ def generate_erd_pdm(sql_text: str, title: str = "Physical Data Model") -> dict:
             "error": "No tables found in SQL. Make sure the input contains CREATE TABLE statements.",
         }
 
-    # ── Layout helpers ────────────────────────────────────────────────────────
-    TABLE_W = 160
-    TABLE_BASE_H = 67        # header height in PowerDesigner canvas units
-    COL_H = 16               # height per column row
-    H_GAP = 40
-    V_GAP = 30
-    COLS_PER_ROW = 4
+    # ── Sequential ID counter (shared across entire document) ─────────────────
+    ctr = [1]            # o1 is used by RootObject; o2 by Model; rest auto-incremented
 
-    def _table_pos(idx):
-        row, col = divmod(idx, COLS_PER_ROW)
-        x = col * (TABLE_W + H_GAP)
-        y = row * 300 + V_GAP          # 300 gives enough vertical room
-        return x, y
+    # ── Assign stable IDs up-front ────────────────────────────────────────────
+    root_id  = "o1"
+    model_id = "o2"
+    ctr[0]   = 2         # next free id starts at o3
 
-    # ── Assign stable object IDs ──────────────────────────────────────────────
-    model_id   = _make_id()
-    model_obj  = _make_id()
-    table_ids  = {name: _make_id() for name in tables}       # table obj IDs
-    col_ids    = {}   # (table_name, col_name) → col obj ID
-    pk_ids     = {}   # table_name → PK obj ID (one per table)
-    ref_ids    = []   # list of (fk, ref_obj_id)
+    model_guid = _make_guid()
+    now_ts     = str(int(_time.time()))
 
-    for tname, table in tables.items():
-        pk_ids[tname] = _make_id()
-        for col in table.columns:
-            col_ids[(tname, col.name)] = _make_id()
+    table_ids  = {}   # table_name  → e.g. "o5"
+    col_ids    = {}   # (tname, cname) → e.g. "o6"
+    pk_ids     = {}   # table_name  → key object id
+    ref_ids    = []   # list of (fk, ref_id)
+
+    for tname in tables:
+        table_ids[tname] = _pdm_id(ctr)
+        pk_ids[tname]    = _pdm_id(ctr)
+        for col in tables[tname].columns:
+            col_ids[(tname, col.name)] = _pdm_id(ctr)
 
     for fk in foreign_keys:
-        ref_ids.append((fk, _make_id()))
+        ref_ids.append((fk, _pdm_id(ctr)))
 
-    # ── Root element ──────────────────────────────────────────────────────────
+    # ── Layout constants (PowerDesigner canvas units) ─────────────────────────
+    TABLE_W      = 160
+    COL_H        = 16
+    HEADER_H     = 50
+    H_GAP        = 60
+    V_GAP        = 40
+    COLS_PER_ROW = 4
+
+    def _rect(idx, col_count):
+        row, col = divmod(idx, COLS_PER_ROW)
+        x = col * (TABLE_W + H_GAP)
+        y = row * (HEADER_H + col_count * COL_H + V_GAP)
+        w = TABLE_W
+        h = HEADER_H + col_count * COL_H
+        return f"{x} {y} {x + w} {y + h}"
+
+    # ── Build XML tree ────────────────────────────────────────────────────────
+    # Root <Model> element — PowerDesigner requires these three namespaces
     root = ET.Element("Model")
-    root.set("xmlns:a",   "attribute")
-    root.set("xmlns:c",   "collection")
-    root.set("xmlns:o",   "object")
+    root.set("xmlns:a", "attribute")
+    root.set("xmlns:c", "collection")
+    root.set("xmlns:o", "object")
 
-    # ── Model header ─────────────────────────────────────────────────────────
-    _sub(root, "o:RootObject", Id=f"o{model_id}")
+    # <o:RootObject>  →  <c:Children>  →  <o:Model>
+    root_obj = _sub(root, "o:RootObject", Id=root_id)
+    children = _sub(root_obj, "c:Children")
+    model_el = _sub(children, "o:Model", Id=model_id)
 
-    model_el = _sub(root, "o:Model", Id=f"o{model_obj}")
-    _sub(model_el, "a:ObjectID",  text=f"{{{model_obj}}}")
-    _sub(model_el, "a:Name",      text=title)
-    _sub(model_el, "a:Code",      text=re.sub(r"\W+", "_", title).upper())
-    _sub(model_el, "a:CreationDate", text="1672531200")   # static; PD will update
-    _sub(model_el, "a:Creator",   text="erd_generator")
-    _sub(model_el, "a:ModificationDate", text="1672531200")
-    _sub(model_el, "a:Modifier",  text="erd_generator")
-    _sub(model_el, "a:TargetModelURL", text=".")
-    _sub(model_el, "a:DBMS", text="ANSI SQL-92")
+    # Model-level attributes
+    _sub(model_el, "a:ObjectID",         text=model_guid)
+    _sub(model_el, "a:Name",             text=title)
+    _sub(model_el, "a:Code",             text=re.sub(r"\W+", "_", title).upper())
+    _sub(model_el, "a:CreationDate",     text=now_ts)
+    _sub(model_el, "a:Creator",          text="erd_generator")
+    _sub(model_el, "a:ModificationDate", text=now_ts)
+    _sub(model_el, "a:Modifier",         text="erd_generator")
+    # Minimal ModelOptions block — PD expects this to exist
+    _sub(model_el, "a:ModelOptions",     text="")
+    # DefaultDiagram placeholder (PD crashes without it)
+    diag_coll   = _sub(model_el, "c:PhysicalDiagrams")
+    diag_el     = _sub(diag_coll, "o:PhysicalDiagram", Id=_pdm_id(ctr))
+    _sub(diag_el, "a:ObjectID", text=_make_guid())
+    _sub(diag_el, "a:Name",     text="DefaultDiagram")
+    _sub(diag_el, "c:Symbols")   # empty symbols collection
 
     # ── Tables ────────────────────────────────────────────────────────────────
-    tables_el = _sub(model_el, "c:Tables")
+    tables_coll = _sub(model_el, "c:Tables")
 
     for idx, (tname, table) in enumerate(tables.items()):
-        tid = table_ids[tname]
-        x, y = _table_pos(idx)
-        h = TABLE_BASE_H + len(table.columns) * COL_H
+        tid  = table_ids[tname]
+        tguid = _make_guid()
 
-        t_el = _sub(tables_el, "o:Table", Id=f"o{tid}")
-        _sub(t_el, "a:ObjectID",  text=f"{{{tid}}}")
-        _sub(t_el, "a:Name",      text=tname)
-        _sub(t_el, "a:Code",      text=tname)
-        _sub(t_el, "a:PhysicalName", text=tname)
-
-        # Symbol / position (used by the PDM diagram view)
-        sym_el = _sub(t_el, "a:Symbol")
-        _sub(sym_el, "a:Rect", text=f"{x} {y} {x + TABLE_W} {y + h}")
-        _sub(sym_el, "a:FillColor", text="15007743")   # light blue-ish
-        _sub(sym_el, "a:LineColor", text="8421504")
+        t_el = _sub(tables_coll, "o:Table", Id=tid)
+        _sub(t_el, "a:ObjectID",     text=tguid)
+        _sub(t_el, "a:Name",         text=tname)
+        _sub(t_el, "a:Code",         text=tname)
+        _sub(t_el, "a:CreationDate", text=now_ts)
+        _sub(t_el, "a:Creator",      text="erd_generator")
+        _sub(t_el, "a:ModificationDate", text=now_ts)
+        _sub(t_el, "a:Modifier",     text="erd_generator")
 
         # ── Columns ───────────────────────────────────────────────────────────
-        cols_el = _sub(t_el, "c:Columns")
-        pk_col_refs = []   # collect PK column element IDs for the key block
+        cols_coll = _sub(t_el, "c:Columns")
+        pk_col_ids = []
 
         for col in table.columns:
             cid = col_ids[(tname, col.name)]
             pd_type, length, precision = _pd_type_info(col.data_type)
 
-            c_el = _sub(cols_el, "o:Column", Id=f"o{cid}")
-            _sub(c_el, "a:ObjectID",     text=f"{{{cid}}}")
+            c_el = _sub(cols_coll, "o:Column", Id=cid)
+            _sub(c_el, "a:ObjectID",     text=_make_guid())
             _sub(c_el, "a:Name",         text=col.name)
             _sub(c_el, "a:Code",         text=col.name)
-            _sub(c_el, "a:PhysicalName", text=col.name)
+            _sub(c_el, "a:CreationDate", text=now_ts)
+            _sub(c_el, "a:Creator",      text="erd_generator")
+            _sub(c_el, "a:ModificationDate", text=now_ts)
+            _sub(c_el, "a:Modifier",     text="erd_generator")
             _sub(c_el, "a:DataType",     text=pd_type)
-            _sub(c_el, "a:LogicalAttribute.Mandatory",
-                 text="1" if not col.is_nullable else "0")
-            if col.default is not None:
-                _sub(c_el, "a:DefaultValue", text=col.default)
+            _sub(c_el, "a:Mandatory",    text="1" if not col.is_nullable else "0")
+
             if length is not None:
                 _sub(c_el, "a:Length",    text=str(length))
             if precision is not None:
                 _sub(c_el, "a:Precision", text=str(precision))
+            if col.default is not None:
+                _sub(c_el, "a:DefaultValue", text=col.default)
+
             if col.is_primary_key:
-                pk_col_refs.append(cid)
+                pk_col_ids.append(cid)
 
-        # ── Primary key block ─────────────────────────────────────────────────
-        if pk_col_refs or table.primary_keys:
-            pkid = pk_ids[tname]
-            keys_el = _sub(t_el, "c:Keys")
-            pk_el = _sub(keys_el, "o:Key", Id=f"o{pkid}")
-            _sub(pk_el, "a:ObjectID", text=f"{{{pkid}}}")
-            _sub(pk_el, "a:Name",     text=f"PK_{tname}")
-            _sub(pk_el, "a:Code",     text=f"PK_{tname}")
-            _sub(pk_el, "a:PhysicalName", text=f"PK_{tname}")
+        # ── Primary Key ───────────────────────────────────────────────────────
+        if pk_col_ids or table.primary_keys:
+            pkid   = pk_ids[tname]
+            keys_c = _sub(t_el, "c:Keys")
+            pk_el  = _sub(keys_c, "o:Key", Id=pkid)
+            _sub(pk_el, "a:ObjectID",     text=_make_guid())
+            _sub(pk_el, "a:Name",         text=f"PK_{tname}")
+            _sub(pk_el, "a:Code",         text=f"PK_{tname}")
+            _sub(pk_el, "a:CreationDate", text=now_ts)
+            _sub(pk_el, "a:Creator",      text="erd_generator")
+            _sub(pk_el, "a:ModificationDate", text=now_ts)
+            _sub(pk_el, "a:Modifier",     text="erd_generator")
 
-            # reference each PK column
-            kc_el = _sub(pk_el, "c:Key.Columns")
-            for cid in pk_col_refs:
-                ref_el = _sub(kc_el, "o:Column")
-                ref_el.set("Ref", f"o{cid}")
+            # Column references inside the key
+            kc_coll = _sub(pk_el, "c:Key.Columns")
+            for cid in pk_col_ids:
+                col_ref = ET.SubElement(kc_coll, "o:Column")
+                col_ref.set("Ref", cid)
 
-            # Mark the table's primary key
-            primary_el = _sub(t_el, "c:PrimaryKey")
-            pk_ref = _sub(primary_el, "o:Key")
-            pk_ref.set("Ref", f"o{pkid}")
+            # Back-reference from table to its primary key
+            prim_c  = _sub(t_el, "c:PrimaryKey")
+            pk_ref  = ET.SubElement(prim_c, "o:Key")
+            pk_ref.set("Ref", pkid)
 
     # ── References (Foreign Keys) ─────────────────────────────────────────────
     if ref_ids:
-        refs_el = _sub(model_el, "c:References")
+        refs_coll = _sub(model_el, "c:References")
 
         for fk, rid in ref_ids:
             if fk.from_table not in tables or fk.to_table not in tables:
                 continue
 
-            parent_tid  = table_ids[fk.to_table]    # referenced (parent) table
-            child_tid   = table_ids[fk.from_table]  # referencing (child) table
+            child_tid   = table_ids[fk.from_table]   # table with the FK column
+            parent_tid  = table_ids[fk.to_table]      # referenced table
             parent_pkid = pk_ids.get(fk.to_table)
             child_col_id  = col_ids.get((fk.from_table, fk.from_col))
-            parent_col_id = col_ids.get((fk.to_table, fk.to_col))
-
+            parent_col_id = col_ids.get((fk.to_table,   fk.to_col))
             ref_name = f"FK_{fk.from_table}_{fk.from_col}"
 
-            r_el = _sub(refs_el, "o:Reference", Id=f"o{rid}")
-            _sub(r_el, "a:ObjectID",     text=f"{{{rid}}}")
-            _sub(r_el, "a:Name",         text=ref_name)
-            _sub(r_el, "a:Code",         text=ref_name)
-            _sub(r_el, "a:PhysicalName", text=ref_name)
+            r_el = _sub(refs_coll, "o:Reference", Id=rid)
+            _sub(r_el, "a:ObjectID",         text=_make_guid())
+            _sub(r_el, "a:Name",             text=ref_name)
+            _sub(r_el, "a:Code",             text=ref_name)
+            _sub(r_el, "a:CreationDate",     text=now_ts)
+            _sub(r_el, "a:Creator",          text="erd_generator")
+            _sub(r_el, "a:ModificationDate", text=now_ts)
+            _sub(r_el, "a:Modifier",         text="erd_generator")
 
-            # Parent table link
-            pt_el = _sub(r_el, "c:ParentTable")
-            pt_ref = _sub(pt_el, "o:Table")
-            pt_ref.set("Ref", f"o{parent_tid}")
+            # Parent table (referenced / "one" side)
+            pt_coll = _sub(r_el, "c:ParentTable")
+            pt_ref  = ET.SubElement(pt_coll, "o:Table")
+            pt_ref.set("Ref", parent_tid)
 
-            # Child table link
-            ct_el = _sub(r_el, "c:ChildTable")
-            ct_ref = _sub(ct_el, "o:Table")
-            ct_ref.set("Ref", f"o{child_tid}")
+            # Child table  ("many" side — holds the FK column)
+            ct_coll = _sub(r_el, "c:ChildTable")
+            ct_ref  = ET.SubElement(ct_coll, "o:Table")
+            ct_ref.set("Ref", child_tid)
 
             # Parent key
             if parent_pkid:
-                pk_el = _sub(r_el, "c:ParentKey")
-                pk_ref = _sub(pk_el, "o:Key")
-                pk_ref.set("Ref", f"o{parent_pkid}")
+                pk_coll = _sub(r_el, "c:ParentKey")
+                pk_ref  = ET.SubElement(pk_coll, "o:Key")
+                pk_ref.set("Ref", parent_pkid)
 
-            # Column joins
-            joins_el = _sub(r_el, "c:Joins")
-            join_el  = _sub(joins_el, "o:ReferenceJoin", Id=f"o{_make_id()}")
+            # Column-level join
+            joins_coll = _sub(r_el, "c:Joins")
+            join_el    = _sub(joins_coll, "o:ReferenceJoin", Id=_pdm_id(ctr))
+            _sub(join_el, "a:ObjectID", text=_make_guid())
+
             if child_col_id:
-                cc_el = _sub(join_el, "c:Object1")
-                cc_ref = _sub(cc_el, "o:Column")
-                cc_ref.set("Ref", f"o{child_col_id}")
-            if parent_col_id:
-                pc_el = _sub(join_el, "c:Object2")
-                pc_ref = _sub(pc_el, "o:Column")
-                pc_ref.set("Ref", f"o{parent_col_id}")
+                obj1 = _sub(join_el, "c:Object1")
+                c1   = ET.SubElement(obj1, "o:Column")
+                c1.set("Ref", child_col_id)
 
-    # ── Serialise ─────────────────────────────────────────────────────────────
-    raw = ET.tostring(root, encoding="unicode", xml_declaration=False)
+            if parent_col_id:
+                obj2 = _sub(join_el, "c:Object2")
+                c2   = ET.SubElement(obj2, "o:Column")
+                c2.set("Ref", parent_col_id)
+
+    # ── Serialise to pretty XML ───────────────────────────────────────────────
+    raw    = ET.tostring(root, encoding="unicode", xml_declaration=False)
     pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding=None)
-    # minidom adds an extra XML declaration; prefix it properly for PD
-    xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + "\n".join(
-        pretty.splitlines()[1:]          # drop minidom's own declaration
+    # Replace minidom's declaration with the proper PowerDesigner header
+    body_lines = pretty.splitlines()[1:]   # drop minidom's own <?xml ...?>
+
+    model_code = re.sub(r"\W+", "_", title).upper()
+    header = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<?PowerDesigner AppLocale="UTF-8"'
+        f' ID="{{{model_guid}}}"'
+        f' Label=""'
+        f' LastModificationDate="{now_ts}"'
+        f' Name="{title}"'
+        f' Objects="{len(tables) + len(foreign_keys)}"'
+        f' Symbols="0"'
+        f' Target="ANSI SQL-92"'
+        f' Type="{{CDE44E21-9669-11D1-9914-006097355D9B}}"'
+        f' signature="PDM_DATA_MODEL_XML"'
+        f' version="16.7.0.5765"?>\n'
+        '<!-- do not edit this file -->\n'
     )
+
+    xml_str = header + "\n".join(body_lines)
 
     return {
         "xml": xml_str,
